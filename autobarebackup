@@ -1,0 +1,245 @@
+#!/bin/bash
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+DIR_BACKUP_BASE="/backup"
+#EMAIL_ALERT=""
+
+SILENT=0
+PARALLEL_COMPRESS=4
+INCREMENTAL_DIR_MAX=1
+
+FILE_CONFIG="/etc/autobarebackup/autobarebackup.conf"
+
+BINARY_NEED=( "find" "tar" "gzip" "mail" )
+CONFIG_ALLOWED=( "SILENT" "PARALLEL_COMPRESS" "INCREMENTAL_DIR_MAX" "INCREMENTAL_DATE" "EMAIL_ALERT" "DIR_BACKUP_BASE" )
+MYHOST=$(hostname)
+DATE_SUFFIX=$(date +%Y-%m-%d_%Hh%Mm_%a)
+INCREMENTAL_DATE=$(date --date="last sunday" +%Y-%m-%d)
+
+LOGFILE="$DIR_BACKUP_BASE/backup.$DATE_SUFFIX.log"
+COMPRESS_PROGRAM="gzip"
+
+UNIQ_FILENAME="sync.lock"
+
+generate_uniq_filename()
+{
+    UNIQ_FILENAME=$(echo "$0"|md5sum 2>&1|awk '{print $1}')
+    if [ "${#UNIQ_FILENAME}" -eq 0 ]; then
+        UNIQ_FILENAME="sync.lock"
+    else
+        UNIQ_FILENAME="$UNIQ_FILENAME.lock"
+    fi
+}
+
+do_help()
+{
+    echo "$0 [option]"
+    echo -e "\t-h: show help"
+    echo -e "\t-q: silent mode"
+    echo -e "\t-c <config>: read a config file"
+    exit 0
+}
+
+do_getopt()
+{
+    local opt=""
+    while getopts "c:hq" opt; do
+	case "$opt" in
+	    c)
+		FILE_CONFIG="$OPTARG"
+	    ;;
+	    h)
+		do_help
+	    ;;
+	    q)
+		SILENT=1
+	    ;;
+	    \?)
+		echo "Option -$OPTARG invalid" >&2
+		do_help
+	    ;;
+	esac
+    done
+}
+
+do_read_config()
+{
+    if [ ! -f "$FILE_CONFIG" ]; then
+	return 0
+    fi
+    local i=0
+    local e=${#CONFIG_ALLOWED[*]}
+    local implode_string=""
+    for (( i=0; i<e; ++i )); do
+	if [ $i -eq 0 ]; then
+	    implode_string=${CONFIG_ALLOWED[$i]}
+	else
+	    implode_string="$implode_string|${CONFIG_ALLOWED[$i]}"
+	fi
+    done
+    source <(grep -E "^\s*($implode_string)=" $FILE_CONFIG)
+}
+
+do_error()
+{
+    local ftime=$(date +%Y-%m-%d" "%H:%M:%S)
+    local msg="$ftime ERROR > $@"
+
+    echo "$msg" >> $LOGFILE
+    echo "$msg" 1>&2
+    if [ ${#EMAIL_ALERT} -gt 5 ];then
+	cat "$LOGFILE"|mail -s "Backup Failed. ($MYHOST - $msg)" "$EMAIL_ALERT"
+    fi
+    exit 1
+}
+
+do_info()
+{
+    local ftime=$(date +%Y-%m-%d" "%H:%M:%S)
+    local category="$1"
+    shift
+    local msg="$ftime INFO $category > $@"
+    echo "$msg" >> $LOGFILE
+    if [ $SILENT -eq 1 ]; then
+        return 0
+    fi
+    echo "$msg"
+}
+
+do_check_binary()
+{
+    local e=${#BINARY_NEED[*]}
+    local i=0
+    for (( i=0; i<e; i++ )); do
+        which ${BINARY_NEED[$i]} >/dev/null
+        if [ $? -ne 0 ]; then
+            do_error "Missing binary: ${BINARY_NEED[$i]}"
+        fi
+    done
+    if [ $PARALLEL_COMPRESS -gt 1 ]; then
+        which pigz >/dev/null
+        if [ $? -eq 0 ]; then
+            COMPRESS_PROGRAM="pigz -p$PARALLEL_COMPRESS"
+        fi
+    fi
+}
+
+do_cleanup_maxfiles()
+{
+    local dir_incr="$1"
+    local offset="$2"
+    offset=$(( offset+0 ))
+    local fp=""
+    if [ "$INCREMENTAL_DIR_MAX" -le 0 ]; then
+        do_info "do_cleanup_maxfiles" "Skip maxfiles cleanup"
+        return 0
+    fi
+    echo "$dir_incr"|grep -q "$DIR_BACKUP_BASE"
+    if [ $? -ne 0 ]; then
+	do_error "Something wrong with do_cleanup_maxfiles first parameter($dir_incr)"
+    fi
+    local numfiles=$(find "$dir_incr/" -type d -printf "%P\n"|grep -v '^$'|wc -l)
+    local real_maxfiles=$(( INCREMENTAL_DIR_MAX-offset ))
+    if [ $numfiles -gt $real_maxfiles ]; then
+        local need_files=$(( numfiles-real_maxfiles ))
+        if [ $need_files -gt 0 ]; then
+            while read fp; do
+                do_info "do_cleanup_maxfiles" "Delete backup $fp"
+                # just to be sure its not rm -rf / :DDD even if it is not possible here
+                if [ ${#fp} -lt 7 ]; then
+            	    do_error "Could not delete $fp."
+                fi
+        	rm -rf "$fp"
+            done < <(find "$dir_incr/" -type d -printf "%T@ %h/%f\n"|sort -n|cut -d ' ' -f2-|head -n "$need_files")
+        fi
+    else
+        do_info "do_cleanup_maxfiles" "No action required. Files found: $numfiles"
+        return 0
+    fi
+}
+
+
+do_compressed_backup()
+{
+    local namespace_fullpath="$1"
+    local include_file="$2"
+    local exclude_file="$3"
+
+    local dir_base_inc="$namespace_fullpath/incr/$INCREMENTAL_DATE"
+    local file_snar="$namespace_fullpath/incr/$INCREMENTAL_DATE/files.snar"
+    local file_backup="$namespace_fullpath/incr/$INCREMENTAL_DATE/$DATE_SUFFIX.tar.gz"
+    local dir_latest="$namespace_fullpath/latest"
+    local link_latest="$dir_latest/$INCREMENTAL_DATE"
+
+    do_cleanup_maxfiles "$namespace_fullpath/incr" 0
+    if [ ! -d "$dir_base_inc" ]; then
+	mkdir -p "$dir_base_inc" || do_error "Failed to create directory: $dir_base_inc"
+    fi
+
+    if [ -f "$file_backup" ]; then
+	do_error "File already exists: $file_backup"
+    fi
+
+    do_info "do_compressed_backup" "Running compress"
+    if [ -f "$exclude_file"  ]; then
+	tar -T "$include_file" --exclude-from="$exclude_file" -g $file_snar -cf - 2>>$LOGFILE | $COMPRESS_PROGRAM >$file_backup 2>>$LOGFILE
+    else
+	tar -T "$include_file" -g $file_snar -cf - 2>>$LOGFILE | $COMPRESS_PROGRAM >$file_backup 2>>$LOGFILE
+    fi
+    if [ $? -ne 0 ]; then
+        do_error "Compress failed";
+    else
+        do_info "do_compressed_backup" "Finished."
+    fi
+
+    if [ ! -d "$dir_latest" ]; then
+	mkdir -p "$dir_latest" || do_error "Failed to create directory: $dir_latest"
+    fi
+
+    find "$dir_latest/" -type l -delete
+    ln -s "$dir_base_inc" "$link_latest" || do_error "Failed to create symlink: $dir_base_inc -> $link_latest"
+    do_cleanup_maxfiles "$namespace_fullpath/incr" 0
+}
+
+do_backup()
+{
+    local backup_namespace=""
+    local namespace_fullpath=""
+    local include_file=""
+    local exclude_file=""
+
+    if [ ! -d "$DIR_BACKUP_BASE" ]; then
+	do_error "Missing base backup directory: $DIR_BACKUP_BASE"
+    fi
+
+    while read backup_namespace; do
+	if [ ${#backup_namespace} -eq 0 ]; then
+	    continue
+	fi
+	namespace_fullpath="$DIR_BACKUP_BASE/$backup_namespace"
+	include_file="$namespace_fullpath/backup.include"
+	exclude_file="$namespace_fullpath/backup.exclude"
+	if [ ! -f "$include_file" ]; then
+	    do_error "Missing include file: $include_file"
+	fi
+	do_info "do_backup" "namespace: $namespace_fullpath"
+	do_compressed_backup "$namespace_fullpath" "$include_file" "$exclude_file"
+    done < <(find "$DIR_BACKUP_BASE" -maxdepth 1 -type d -printf "%P\n")
+}
+
+do_cleanup_logs()
+{
+    find "$DIR_BACKUP_BASE/" -type f -name "*.log" -mtime +7 -delete
+}
+
+do_check_binary
+generate_uniq_filename
+
+(
+    flock -n -e 200 || do_error "Another backup is already running"
+    do_getopt "$@"
+    do_read_config
+    do_backup
+    do_cleanup_logs
+) 200>/var/lock/$UNIQ_FILENAME
