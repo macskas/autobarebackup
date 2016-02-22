@@ -225,7 +225,8 @@ do_backup()
 	include_file="$namespace_fullpath/backup.include"
 	exclude_file="$namespace_fullpath/backup.exclude"
 	if [ ! -f "$include_file" ]; then
-	    do_error "Missing include file: $include_file"
+	    do_info "do_backup" "Skip backup - $backup_namespace - missing include file: $include_file"
+	    continue
 	fi
 	do_info "do_backup" "namespace: $namespace_fullpath"
 	do_compressed_backup "$namespace_fullpath" "$include_file" "$exclude_file"
