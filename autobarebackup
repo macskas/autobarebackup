@@ -135,6 +135,10 @@ do_cleanup_maxfiles()
         do_info "do_cleanup_maxfiles" "Skip maxfiles cleanup"
         return 0
     fi
+    if [ ! -d "$dir_incr" ]; then
+    	do_info "do_cleanup_maxfiles" "Skip cleanup - First run"
+    	return 0
+    fi
     echo "$dir_incr"|grep -q "$DIR_BACKUP_BASE"
     if [ $? -ne 0 ]; then
 	do_error "Something wrong with do_cleanup_maxfiles first parameter($dir_incr)"
