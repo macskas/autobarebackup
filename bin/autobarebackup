@@ -24,7 +24,7 @@ COMPRESS_PROGRAM="gzip"
 
 UNIQ_FILENAME="sync.lock"
 
-SCRIPT_VERSION="20160225"
+SCRIPT_VERSION="2016022501"
 
 
 generate_uniq_filename()
@@ -181,11 +181,11 @@ do_update()
         do_error "Unable to find script_version in the new script."
     fi
     if [ "$tmp_version" -le "$SCRIPT_VERSION" ]; then
-	do_info "You have the latest version. No update required."
+	do_info "do_update" "You have the latest version. No update required."
 	rm -f "$tmp_f"
 	exit 0
     fi
-    do_info "Update is required - new version: $tmp_version."
+    do_info "do_update" "Update is required - new version: $tmp_version."
     # sanity check on arg0
     grep -q SCRIPT_VERSION "$0"
     if [ $? -ne 0 ]; then
@@ -194,7 +194,7 @@ do_update()
     fi
     chmod 755 "$tmp_f" || do_error "Chmod failed on $tmp_f."
     mv "$tmp_f" "$0"
-    do_info "Updated was successful."
+    do_info "do_update" "Updated was successful."
     exit 0
 }
 
