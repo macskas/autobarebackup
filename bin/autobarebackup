@@ -5,14 +5,16 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DIR_BACKUP_BASE="/backup"
 #EMAIL_ALERT=""
 
+
 SILENT=0
 PARALLEL_COMPRESS=4
 INCREMENTAL_DIR_MAX=1
+SCRIPT_UPDATE_URL="https://raw.githubusercontent.com/macskas/autobarebackup/master/bin/autobarebackup"
 
 FILE_CONFIG="/etc/autobarebackup/autobarebackup.conf"
 
 BINARY_NEED=( "find" "tar" "gzip" "mail" )
-CONFIG_ALLOWED=( "SILENT" "PARALLEL_COMPRESS" "INCREMENTAL_DIR_MAX" "INCREMENTAL_DATE" "EMAIL_ALERT" "DIR_BACKUP_BASE" )
+CONFIG_ALLOWED=( "SILENT" "PARALLEL_COMPRESS" "INCREMENTAL_DIR_MAX" "INCREMENTAL_DATE" "EMAIL_ALERT" "DIR_BACKUP_BASE" "SCRIPT_UPDATE_URL" )
 MYHOST=$(hostname)
 DATE_SUFFIX=$(date +%Y-%m-%d_%Hh%Mm_%a)
 INCREMENTAL_DATE=$(date --date="last sunday" +%Y-%m-%d)
@@ -21,6 +23,9 @@ LOGFILE="$DIR_BACKUP_BASE/backup.$DATE_SUFFIX.log"
 COMPRESS_PROGRAM="gzip"
 
 UNIQ_FILENAME="sync.lock"
+
+SCRIPT_VERSION="20160225"
+
 
 generate_uniq_filename()
 {
@@ -34,17 +39,20 @@ generate_uniq_filename()
 
 do_help()
 {
-    echo "$0 [option]"
+    echo "autobarebackup $SCRIPT_VERSION, basic autobareback script. For easy bacula backups."
+    echo "Usage: $0 [option]"
     echo -e "\t-h: show help"
     echo -e "\t-q: silent mode"
+    echo -e "\t-u: update from github (master)"
     echo -e "\t-c <config>: read a config file"
     exit 0
 }
 
+
 do_getopt()
 {
     local opt=""
-    while getopts "c:hq" opt; do
+    while getopts "c:hqu" opt; do
 	case "$opt" in
 	    c)
 		FILE_CONFIG="$OPTARG"
@@ -54,6 +62,10 @@ do_getopt()
 	    ;;
 	    q)
 		SILENT=1
+	    ;;
+	    u)
+		do_update
+		exit 0
 	    ;;
 	    \?)
 		echo "Option -$OPTARG invalid" >&2
@@ -112,17 +124,78 @@ do_check_binary()
     local e=${#BINARY_NEED[*]}
     local i=0
     for (( i=0; i<e; i++ )); do
-        which ${BINARY_NEED[$i]} >/dev/null
+        do_check_binary_one "${BINARY_NEED[$i]}"
         if [ $? -ne 0 ]; then
             do_error "Missing binary: ${BINARY_NEED[$i]}"
         fi
     done
     if [ $PARALLEL_COMPRESS -gt 1 ]; then
-        which pigz >/dev/null
+        do_check_binary_one pigz
         if [ $? -eq 0 ]; then
             COMPRESS_PROGRAM="pigz -p$PARALLEL_COMPRESS"
         fi
     fi
+}
+
+do_check_binary_one()
+{
+    local prg="$1"
+    which "$prg" >/dev/null
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+    return 0
+}
+
+do_update()
+{
+    local curl_ok=0
+    local wget_ok=0
+    local tmp_f=""
+    do_check_binary_one "curl" && curl_ok=1
+    do_check_binary_one "wget" && wget_ok=1
+    do_check_binary_one "mktemp" || do_error "Need mktemp command for updating"
+    do_info "do_update" "download new version from $SCRIPT_URL"
+    if [ "$curl_ok" -eq 1 ]; then
+	tmp_f=$(mktemp)
+	[ -f "$tmp_f" ] || do_error "mktemp failed."
+	curl -s --connect-timeout 10 -o "$tmp_f" "$SCRIPT_UPDATE_URL"
+	if [ $? -ne 0 ]; then
+	    rm -f "$tmp_f"
+	    do_error "Unable to download new version"
+	fi
+    elif [ "$wget_ok" -eq 1 ]; then
+	tmp_f=$(mktemp)
+	[ -f "$tmp_f" ] || do_error "mktemp failed."
+	wget -q -T 10 -O "$tmp_f" "$SCRIPT_UPDATE_URL"
+	if [ $? -ne 0 ]; then
+	    rm -f "$tmp_f"
+	    do_error "Unable to download new version"
+	fi
+    else
+	do_error "Need wget or curl"
+    fi
+    local tmp_version=$(grep -E "^\s*SCRIPT_VERSION=[0-9]+" "$tmp_f"|sed 's,^\s*SCRIPT_VERSION=\([0-9]*\)$,\1,') #'
+    if [ ${#tmp_version} -lt 5 ]; then
+        rm -f "$tmp_f"
+        do_error "Unable to find script_version in the new script."
+    fi
+    if [ "$tmp_version" -le "$SCRIPT_VERSION" ]; then
+	do_info "You have the latest version. No update required."
+	rm -f "$tmp_f"
+	exit 0
+    fi
+    do_info "Update is required - new version: $tmp_version."
+    # sanity check on arg0
+    grep -q SCRIPT_VERSION "$0"
+    if [ $? -ne 0 ]; then
+	rm -f "$tmp_f"
+	do_error "Something wrong with argv[0]: ($0)"
+    fi
+    chmod 755 "$tmp_f" || do_error "Chmod failed on $tmp_f."
+    mv "$tmp_f" "$0"
+    do_info "Updated was successful."
+    exit 0
 }
 
 do_cleanup_maxfiles()
@@ -163,6 +236,60 @@ do_cleanup_maxfiles()
     fi
 }
 
+do_squashfs_backup()
+{
+    local namespace_fullpath="$1"
+    local include_file="$2"
+    local exclude_file="$3"
+
+    local FULL_DATE=$(date +%Y-%m-%d)
+    local dir_base_full="$namespace_fullpath/full/$FULL_DATE"
+    local dir_latest="$namespace_fullpath/latest"
+    local link_latest="$dir_latest/$FULL_DATE"
+
+    do_cleanup_maxfiles "$namespace_fullpath/full" 0
+
+    if [ ! -d "$dir_base_full" ]; then
+	mkdir -p "$dir_base_full" || do_error "Failed to create directory: $dir_base_full"
+    fi
+
+    # mksquashfs /www backup_file.fs -ef /backup/www/backup.exclude -wildcards -keep-as-directory
+    do_info "do_squashfs_backup" "Running mksquashfs"
+    local tmp_include=""
+    local file_backup=""
+    local tmp_include_formatted=""
+    while read tmp_include; do
+	if [ ! -e "$tmp_include" ]; then
+	    do_error "Missing backup target: $tmp_include (from $include_file)"
+	fi
+	tmp_include_formatted=$(echo "$tmp_include"|sed 's,[^a-zA-Z0-9_-],_,g')
+	file_backup="$dir_base_full/${DATE_SUFFIX}-${tmp_include_formatted}.squashfs"
+	if [ -f "$file_backup" ]; then
+	    do_error "File already exists: $file_backup"
+	fi
+        if [ -f "$exclude_file"  ]; then
+    	    do_info "do_squashfs_backup" "mksquashfs $tmp_include $file_backup -ef $exclude_file -no-progress -wildcards -noappend -keep-as-directory"
+	    mksquashfs "$tmp_include" "$file_backup" -ef "$exclude_file" -no-progress -wildcards -noappend -keep-as-directory >>$LOGFILE 2>>$LOGFILE
+	else
+	    do_info "do_squashfs_backup" "mksquashfs $tmp_include $file_backup -no-progress -wildcards -noappend -keep-as-directory"
+	    mksquashfs "$tmp_include" "$file_backup" -no-progress -wildcards -noappend -keep-as-directory >>$LOGFILE 2>>$LOGFILE
+	fi
+	if [ $? -ne 0 ]; then
+    	    do_error "mksquashfs failed";
+	else
+    	    do_info "do_squashfs_backup" "Finished."
+	fi
+    done < "$include_file"
+
+    if [ ! -d "$dir_latest" ]; then
+	mkdir -p "$dir_latest" || do_error "Failed to create directory: $dir_latest"
+    fi
+
+    find "$dir_latest/" -type l -delete
+    ln -s "$dir_base_full" "$link_latest" || do_error "Failed to create symlink: $dir_base_full -> $link_latest"
+    do_cleanup_maxfiles "$namespace_fullpath/full" 0
+
+}
 
 do_compressed_backup()
 {
@@ -212,6 +339,8 @@ do_backup()
     local namespace_fullpath=""
     local include_file=""
     local exclude_file=""
+    local method_file=""
+    local method_local="tar"
 
     if [ ! -d "$DIR_BACKUP_BASE" ]; then
 	do_error "Missing base backup directory: $DIR_BACKUP_BASE"
@@ -221,15 +350,33 @@ do_backup()
 	if [ ${#backup_namespace} -eq 0 ]; then
 	    continue
 	fi
+	method_local="tar"
 	namespace_fullpath="$DIR_BACKUP_BASE/$backup_namespace"
 	include_file="$namespace_fullpath/backup.include"
 	exclude_file="$namespace_fullpath/backup.exclude"
+	method_file="$namespace_fullpath/backup.method"
 	if [ ! -f "$include_file" ]; then
 	    do_info "do_backup" "Skip backup - $backup_namespace - missing include file: $include_file"
 	    continue
 	fi
+	if [ -f "$method_file" ]; then
+	    method_local=$(head -n1 $method_file)
+	    if [ "$method_local" = "tar" ]; then
+		method_local="tar"
+	    elif [ "$method_local" = "mksquashfs" ]; then
+		do_check_binary_one "$method_local" || do_error "mksquashfs command is unavailable"
+	    else
+		do_error "Unknown method in file: $method_file"
+	    fi
+	fi
 	do_info "do_backup" "namespace: $namespace_fullpath"
-	do_compressed_backup "$namespace_fullpath" "$include_file" "$exclude_file"
+	case "$method_local" in
+	    mksquashfs)
+		do_squashfs_backup "$namespace_fullpath" "$include_file" "$exclude_file"
+	    ;;
+	    *)
+		do_compressed_backup "$namespace_fullpath" "$include_file" "$exclude_file"
+	esac
     done < <(find "$DIR_BACKUP_BASE" -maxdepth 1 -type d -printf "%P\n")
 }
 
