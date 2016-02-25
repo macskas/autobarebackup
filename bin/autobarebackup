@@ -175,7 +175,7 @@ do_update()
     else
 	do_error "Need wget or curl"
     fi
-    local tmp_version=$(grep -E "^\s*SCRIPT_VERSION=[0-9]+" "$tmp_f"|sed 's,^\s*SCRIPT_VERSION=\([0-9]*\)$,\1,') #'
+    local tmp_version=$(grep -E '^\s*SCRIPT_VERSION="[0-9]+"' "$tmp_f"|grep -Eo "[0-9]+")
     if [ ${#tmp_version} -lt 5 ]; then
         rm -f "$tmp_f"
         do_error "Unable to find script_version in the new script."
