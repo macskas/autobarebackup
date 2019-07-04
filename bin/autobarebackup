@@ -3,6 +3,7 @@
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 DIR_BACKUP_BASE="/backup"
+LOCK_DIR="/var/lock"
 #EMAIL_ALERT=""
 
 
@@ -14,7 +15,7 @@ SCRIPT_UPDATE_URL="https://raw.githubusercontent.com/macskas/autobarebackup/mast
 FILE_CONFIG="/etc/autobarebackup/autobarebackup.conf"
 
 BINARY_NEED=( "find" "tar" "gzip" "mail" )
-CONFIG_ALLOWED=( "SILENT" "PARALLEL_COMPRESS" "INCREMENTAL_DIR_MAX" "INCREMENTAL_DATE" "EMAIL_ALERT" "DIR_BACKUP_BASE" "SCRIPT_UPDATE_URL" )
+CONFIG_ALLOWED=( "SILENT" "PARALLEL_COMPRESS" "INCREMENTAL_DIR_MAX" "INCREMENTAL_DATE" "EMAIL_ALERT" "DIR_BACKUP_BASE" "SCRIPT_UPDATE_URL" "LOCK_DIR" )
 MYHOST=$(hostname)
 DATE_SUFFIX=$(date +%Y-%m-%d_%Hh%Mm_%a)
 INCREMENTAL_DATE=$(date --date="last sunday" +%Y-%m-%d)
@@ -394,4 +395,4 @@ generate_uniq_filename
     do_read_config
     do_backup
     do_cleanup_logs
-) 200>/var/lock/$UNIQ_FILENAME
+) 200>$LOCK_DIR/$UNIQ_FILENAME
