@@ -388,11 +388,11 @@ do_cleanup_logs()
 
 do_check_binary
 generate_uniq_filename
+do_read_config
 
 (
     flock -n -e 200 || do_error "Another backup is already running"
     do_getopt "$@"
-    do_read_config
     do_backup
     do_cleanup_logs
 ) 200>$LOCK_DIR/$UNIQ_FILENAME
