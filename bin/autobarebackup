@@ -1,8 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 DIR_BACKUP_BASE="/backup"
+LOCK_DIR="/var/lock"
 #EMAIL_ALERT=""
 
 
@@ -14,11 +15,12 @@ SCRIPT_UPDATE_URL="https://raw.githubusercontent.com/macskas/autobarebackup/mast
 FILE_CONFIG="/etc/autobarebackup/autobarebackup.conf"
 
 BINARY_NEED=( "find" "tar" "gzip" "mail" )
-CONFIG_ALLOWED=( "SILENT" "PARALLEL_COMPRESS" "INCREMENTAL_DIR_MAX" "INCREMENTAL_DATE" "EMAIL_ALERT" "DIR_BACKUP_BASE" "SCRIPT_UPDATE_URL" )
+CONFIG_ALLOWED=( "SILENT" "PARALLEL_COMPRESS" "INCREMENTAL_DIR_MAX" "INCREMENTAL_DATE" "EMAIL_ALERT" "DIR_BACKUP_BASE" "SCRIPT_UPDATE_URL" "LOCK_DIR" )
 MYHOST=$(hostname)
 DATE_SUFFIX=$(date +%Y-%m-%d_%Hh%Mm_%a)
 INCREMENTAL_DATE=$(date --date="last sunday" +%Y-%m-%d)
 
+# will be overridden once config is read
 LOGFILE="$DIR_BACKUP_BASE/backup.$DATE_SUFFIX.log"
 COMPRESS_PROGRAM="gzip"
 
@@ -55,21 +57,21 @@ do_getopt()
     while getopts "c:hqu" opt; do
 	case "$opt" in
 	    c)
-		FILE_CONFIG="$OPTARG"
-	    ;;
+            FILE_CONFIG="$OPTARG"
+        ;;
 	    h)
-		do_help
-	    ;;
+            do_help
+        ;;
 	    q)
-		SILENT=1
-	    ;;
+            SILENT=1
+        ;;
 	    u)
-		do_update
-		exit 0
-	    ;;
+            do_update
+            exit 0
+        ;;
 	    \?)
-		echo "Option -$OPTARG invalid" >&2
-		do_help
+            echo "Option -$OPTARG invalid" >&2
+            do_help
 	    ;;
 	esac
     done
@@ -78,17 +80,17 @@ do_getopt()
 do_read_config()
 {
     if [ ! -f "$FILE_CONFIG" ]; then
-	return 0
+	    return 0
     fi
     local i=0
     local e=${#CONFIG_ALLOWED[*]}
     local implode_string=""
     for (( i=0; i<e; ++i )); do
-	if [ $i -eq 0 ]; then
-	    implode_string=${CONFIG_ALLOWED[$i]}
-	else
-	    implode_string="$implode_string|${CONFIG_ALLOWED[$i]}"
-	fi
+        if [ $i -eq 0 ]; then
+            implode_string=${CONFIG_ALLOWED[$i]}
+        else
+            implode_string="$implode_string|${CONFIG_ALLOWED[$i]}"
+        fi
     done
     source <(grep -E "^\s*($implode_string)=" $FILE_CONFIG)
 }
@@ -101,7 +103,7 @@ do_error()
     echo "$msg" >> $LOGFILE
     echo "$msg" 1>&2
     if [ ${#EMAIL_ALERT} -gt 5 ];then
-	cat "$LOGFILE"|mail -s "Backup Failed. ($MYHOST - $msg)" "$EMAIL_ALERT"
+        cat "$LOGFILE"|mail -s "Backup Failed. ($MYHOST - $msg)" "$EMAIL_ALERT"
     fi
     exit 1
 }
@@ -157,23 +159,23 @@ do_update()
     do_check_binary_one "mktemp" || do_error "Need mktemp command for updating"
     do_info "do_update" "download new version from $SCRIPT_URL"
     if [ "$curl_ok" -eq 1 ]; then
-	tmp_f=$(mktemp)
-	[ -f "$tmp_f" ] || do_error "mktemp failed."
-	curl -s --connect-timeout 10 -o "$tmp_f" "$SCRIPT_UPDATE_URL"
-	if [ $? -ne 0 ]; then
-	    rm -f "$tmp_f"
-	    do_error "Unable to download new version"
-	fi
+        tmp_f=$(mktemp)
+        [ -f "$tmp_f" ] || do_error "mktemp failed."
+        curl -s --connect-timeout 10 -o "$tmp_f" "$SCRIPT_UPDATE_URL"
+        if [ $? -ne 0 ]; then
+            rm -f "$tmp_f"
+            do_error "Unable to download new version"
+        fi
     elif [ "$wget_ok" -eq 1 ]; then
-	tmp_f=$(mktemp)
-	[ -f "$tmp_f" ] || do_error "mktemp failed."
-	wget -q -T 10 -O "$tmp_f" "$SCRIPT_UPDATE_URL"
-	if [ $? -ne 0 ]; then
-	    rm -f "$tmp_f"
-	    do_error "Unable to download new version"
-	fi
+        tmp_f=$(mktemp)
+        [ -f "$tmp_f" ] || do_error "mktemp failed."
+        wget -q -T 10 -O "$tmp_f" "$SCRIPT_UPDATE_URL"
+        if [ $? -ne 0 ]; then
+            rm -f "$tmp_f"
+            do_error "Unable to download new version"
+        fi
     else
-	do_error "Need wget or curl"
+        do_error "Need wget or curl"
     fi
     local tmp_version=$(grep -E '^\s*SCRIPT_VERSION="[0-9]+"' "$tmp_f"|grep -Eo "[0-9]+")
     if [ ${#tmp_version} -lt 5 ]; then
@@ -181,16 +183,16 @@ do_update()
         do_error "Unable to find script_version in the new script."
     fi
     if [ "$tmp_version" -le "$SCRIPT_VERSION" ]; then
-	do_info "do_update" "You have the latest version. No update required."
-	rm -f "$tmp_f"
-	exit 0
+        do_info "do_update" "You have the latest version. No update required."
+        rm -f "$tmp_f"
+        exit 0
     fi
     do_info "do_update" "Update is required - new version: $tmp_version."
     # sanity check on arg0
     grep -q SCRIPT_VERSION "$0"
     if [ $? -ne 0 ]; then
-	rm -f "$tmp_f"
-	do_error "Something wrong with argv[0]: ($0)"
+        rm -f "$tmp_f"
+        do_error "Something wrong with argv[0]: ($0)"
     fi
     chmod 755 "$tmp_f" || do_error "Chmod failed on $tmp_f."
     mv "$tmp_f" "$0"
@@ -214,7 +216,7 @@ do_cleanup_maxfiles()
     fi
     echo "$dir_incr"|grep -q "$DIR_BACKUP_BASE"
     if [ $? -ne 0 ]; then
-	do_error "Something wrong with do_cleanup_maxfiles first parameter($dir_incr)"
+        do_error "Something wrong with do_cleanup_maxfiles first parameter($dir_incr)"
     fi
     local numfiles=$(find "$dir_incr/" -type d -printf "%P\n"|grep -v '^$'|wc -l)
     local real_maxfiles=$(( INCREMENTAL_DIR_MAX-offset ))
@@ -305,18 +307,18 @@ do_compressed_backup()
 
     do_cleanup_maxfiles "$namespace_fullpath/incr" 0
     if [ ! -d "$dir_base_inc" ]; then
-	mkdir -p "$dir_base_inc" || do_error "Failed to create directory: $dir_base_inc"
+        mkdir -p "$dir_base_inc" || do_error "Failed to create directory: $dir_base_inc"
     fi
 
     if [ -f "$file_backup" ]; then
-	do_error "File already exists: $file_backup"
+        do_error "File already exists: $file_backup"
     fi
 
     do_info "do_compressed_backup" "Running compress"
     if [ -f "$exclude_file"  ]; then
-	tar -T "$include_file" --exclude-from="$exclude_file" -g $file_snar -cf - 2>>$LOGFILE | $COMPRESS_PROGRAM >$file_backup 2>>$LOGFILE
+        tar -T "$include_file" --exclude-from="$exclude_file" -g$file_snar -cf - 2>>$LOGFILE | $COMPRESS_PROGRAM >$file_backup 2>>$LOGFILE
     else
-	tar -T "$include_file" -g $file_snar -cf - 2>>$LOGFILE | $COMPRESS_PROGRAM >$file_backup 2>>$LOGFILE
+        tar -T "$include_file" -g$file_snar -cf - 2>>$LOGFILE | $COMPRESS_PROGRAM >$file_backup 2>>$LOGFILE
     fi
     if [ $? -ne 0 ]; then
         do_error "Compress failed";
@@ -325,7 +327,7 @@ do_compressed_backup()
     fi
 
     if [ ! -d "$dir_latest" ]; then
-	mkdir -p "$dir_latest" || do_error "Failed to create directory: $dir_latest"
+        mkdir -p "$dir_latest" || do_error "Failed to create directory: $dir_latest"
     fi
 
     find "$dir_latest/" -type l -delete
@@ -343,40 +345,42 @@ do_backup()
     local method_local="tar"
 
     if [ ! -d "$DIR_BACKUP_BASE" ]; then
-	do_error "Missing base backup directory: $DIR_BACKUP_BASE"
+        do_error "Missing base backup directory: $DIR_BACKUP_BASE"
     fi
 
     while read backup_namespace; do
-	if [ ${#backup_namespace} -eq 0 ]; then
-	    continue
-	fi
-	method_local="tar"
-	namespace_fullpath="$DIR_BACKUP_BASE/$backup_namespace"
-	include_file="$namespace_fullpath/backup.include"
-	exclude_file="$namespace_fullpath/backup.exclude"
-	method_file="$namespace_fullpath/backup.method"
-	if [ ! -f "$include_file" ]; then
-	    do_info "do_backup" "Skip backup - $backup_namespace - missing include file: $include_file"
-	    continue
-	fi
-	if [ -f "$method_file" ]; then
-	    method_local=$(head -n1 $method_file)
-	    if [ "$method_local" = "tar" ]; then
-		method_local="tar"
-	    elif [ "$method_local" = "mksquashfs" ]; then
-		do_check_binary_one "$method_local" || do_error "mksquashfs command is unavailable"
-	    else
-		do_error "Unknown method in file: $method_file"
-	    fi
-	fi
-	do_info "do_backup" "namespace: $namespace_fullpath"
-	case "$method_local" in
-	    mksquashfs)
-		do_squashfs_backup "$namespace_fullpath" "$include_file" "$exclude_file"
-	    ;;
-	    *)
-		do_compressed_backup "$namespace_fullpath" "$include_file" "$exclude_file"
-	esac
+        if [ ${#backup_namespace} -eq 0 ]; then
+            continue
+        fi
+
+        method_local="tar"
+        namespace_fullpath="$DIR_BACKUP_BASE/$backup_namespace"
+        include_file="$namespace_fullpath/backup.include"
+        do_info "include file: $include_file"
+        exclude_file="$namespace_fullpath/backup.exclude"
+        method_file="$namespace_fullpath/backup.method"
+        if [ ! -f "$include_file" ]; then
+            do_info "do_backup" "Skip backup - $backup_namespace - missing include file: $include_file"
+            continue
+        fi
+        if [ -f "$method_file" ]; then
+            method_local=$(head -n1 $method_file)
+            if [ "$method_local" = "tar" ]; then
+                method_local="tar"
+            elif [ "$method_local" = "mksquashfs" ]; then
+                do_check_binary_one "$method_local" || do_error "mksquashfs command is unavailable"
+            else
+                do_error "Unknown method in file: $method_file"
+            fi
+        fi
+        do_info "do_backup" "namespace: $namespace_fullpath"
+        case "$method_local" in
+            mksquashfs)
+                do_squashfs_backup "$namespace_fullpath" "$include_file" "$exclude_file"
+            ;;
+            *)
+                do_compressed_backup "$namespace_fullpath" "$include_file" "$exclude_file"
+        esac
     done < <(find "$DIR_BACKUP_BASE" -maxdepth 1 -type d -printf "%P\n")
 }
 
@@ -385,13 +389,14 @@ do_cleanup_logs()
     find "$DIR_BACKUP_BASE/" -type f -name "*.log" -mtime +7 -delete
 }
 
+do_getopt "$@"
+do_read_config
+LOGFILE="$DIR_BACKUP_BASE/backup.$DATE_SUFFIX.log"
 do_check_binary
 generate_uniq_filename
 
 (
     flock -n -e 200 || do_error "Another backup is already running"
-    do_getopt "$@"
-    do_read_config
     do_backup
     do_cleanup_logs
-) 200>/var/lock/$UNIQ_FILENAME
+) 200>$LOCK_DIR/$UNIQ_FILENAME
