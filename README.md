@@ -1,13 +1,25 @@
-# autobarebackup
+autobarebackup
+==============
 just a really simple incremental backup script for linux using tar and pigz or mksquashfs. I created this for bacula because if I have a lot of files the bacula db could grow really big.
 
-
-## usage
-first create the /backup/$namespace ($DIR_BACKUP_BASE, $namespace is for multiple filesets) 
+# usage
+first create the /backup/$namespace ($DIR\_BACKUP\_BASE, $namespace is for multiple filesets) 
 write the directory list in the/backup/$namespace/backup.include (tar -T format)
 you can also create an exclude list: /backup/$namespace/backup.exclude (--exclude-from format)
 you can optinally define the backup method in /backup/$namespace/backup.method (valid options: tar or mksquashfs). 
 
+## valid config-file options
+
+ * SILENT
+ * PARALLEL\_COMPRESS
+ * INCREMENTAL\_DIR\_MAX
+ * INCREMENTAL\_DATE
+ * EMAIL\_ALERT
+ * DIR\_BACKUP\_BASE
+ * SCRIPT\_UPDATE\_URL
+ * LOCK\_DIR
+
+## backup methods
 ### if the backup.method == "squashfs"
 If you are using squashfs it wont be incremental, but it will be deduplicated and compressed.
 
@@ -23,7 +35,7 @@ you can just create a cronjob for this.
         -u: update from github (master)
         -c <config>: read a config file
 ```
-### example directory tree after the backup
+## example directory tree after the backup
 ```
 /backup/
 /backup/www
@@ -46,7 +58,7 @@ you can just create a cronjob for this.
 /backup/misc/incr/2016-02-14/files.snar
 ```
 
-### bacula
+# Using autobarebackup with bacula
 example bacula fileset config (/etc/bacula/conf.d/fileset/AutoBareMetalBackupFiles.conf)
 ```
 FileSet {
